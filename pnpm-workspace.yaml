@@ -1,0 +1,5 @@
+allowBuilds:
+  '@prisma/engines': true
+  msw: true
+  prisma: true
+  '@libsql/client': true

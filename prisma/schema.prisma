@@ -1,0 +1,124 @@
+// Prisma schema — off-chain index for the Relief Funds app
+// Mirrors on-chain state from the Soroban ReliefFund contract and adds
+// metadata that doesn't belong on-chain (free-text notes, audit logs, etc.)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Programs
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Program {
+  id              Int       @id @default(autoincrement())
+  /// On-chain program_id from the Soroban contract (null until tx confirmed)
+  onchainId       Int?      @unique @map("onchain_id")
+  name            String
+  region          String
+  /// Stellar asset contract address (e.g. USDC SAC)
+  tokenAddress    String    @map("token_address")
+  /// Budget in token stroops (7 decimal places for XLM-based assets)
+  budget          BigInt
+  disbursed       BigInt    @default(0)
+  status          String    @default("Planning") // Planning | Active | Paused | Closed
+  /// Stellar address of the program admin keypair
+  adminAddress    String    @map("admin_address")
+  notes           String?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  recipients      Recipient[]
+  disbursements   Disbursement[]
+
+  @@map("programs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recipients
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Recipient {
+  id            Int       @id @default(autoincrement())
+  programId     Int       @map("program_id")
+  program       Program   @relation(fields: [programId], references: [id], onDelete: Cascade)
+  /// Beneficiary's Stellar G-address
+  walletAddress String    @map("wallet_address")
+  name          String
+  /// PendingId | Verified | Suspended
+  status        String    @default("PendingId")
+  /// Total tokens received in this program (stroops)
+  totalReceived BigInt    @default(0) @map("total_received")
+  /// Optional national-ID hash for KYC audit trail (never store raw ID)
+  idHash        String?   @map("id_hash")
+  notes         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  disbursementRecipients DisbursementRecipient[]
+
+  @@unique([programId, walletAddress])
+  @@map("recipients")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Disbursements
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Disbursement {
+  id              Int       @id @default(autoincrement())
+  programId       Int       @map("program_id")
+  program         Program   @relation(fields: [programId], references: [id], onDelete: Cascade)
+  /// On-chain sequence number within the program (null until confirmed)
+  onchainSeq      Int?      @map("onchain_seq")
+  /// Amount sent to each recipient in this batch (stroops)
+  amountEach      BigInt    @map("amount_each")
+  /// Number of recipients in this batch
+  recipientCount  Int       @map("recipient_count")
+  /// Stellar transaction hash once submitted
+  txHash          String?   @map("tx_hash")
+  /// pending | submitted | confirmed | failed
+  txStatus        String    @default("pending") @map("tx_status")
+  /// Stellar address that triggered this disbursement
+  triggeredBy     String    @map("triggered_by")
+  executedAt      DateTime? @map("executed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  recipients      DisbursementRecipient[]
+
+  @@map("disbursements")
+}
+
+// Join table: which recipients were included in which disbursement
+model DisbursementRecipient {
+  disbursementId  Int          @map("disbursement_id")
+  disbursement    Disbursement @relation(fields: [disbursementId], references: [id], onDelete: Cascade)
+  recipientId     Int          @map("recipient_id")
+  recipient       Recipient    @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@id([disbursementId, recipientId])
+  @@map("disbursement_recipients")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Audit log — immutable append-only trail
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  /// e.g. "program.created" | "recipient.verified" | "disbursement.confirmed"
+  action      String
+  /// JSON blob with any relevant context
+  payload     String   @default("{}")
+  /// Stellar address of the actor (if known)
+  actor       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("audit_logs")
+}
